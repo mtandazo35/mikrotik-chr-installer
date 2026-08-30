@@ -16,7 +16,7 @@ creaba VMs que RouterOS 6.x no podía arrancar.
 En el nodo Proxmox, **como root**:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mtandazo35/mikrotik-chr-installer/v1.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mtandazo35/mikrotik-chr-installer/v1.2/install.sh | bash
 ```
 
 Deja el instalador en `/root/mikrotik-chr-install.sh` y lanza el asistente.
@@ -129,7 +129,7 @@ script viejo: la VM arranca el bootloader pero el kernel no encuentra disco.
 | 5 | VMID: solo miraba si existía el directorio | Consulta `/cluster/resources` + los `.conf`; sugiere `nextid` |
 | 6 | `qm resize +0.875G` — asume que la imagen mide 128 MB | Tamaño absoluto configurable |
 | 7 | Sin `--balloon 0` (CHR no lleva bien el ballooning) | `--balloon 0` |
-| 8 | Sin `discard=on`, sin detección de SSD | `discard=on` + `ssd=1` auto-detectado |
+| 8 | Sin `discard=on` | `discard=on` (thin provisioning real) |
 | 9 | `--cores 1 --memory 1024 --net0 vmbr0` fijos, sin preguntar | Pregunta cores, RAM, disco, storage, bridge y VLAN |
 | 10 | `--bootdisk` (obsoleto), sin `--boot order=` | `--boot order=virtio0` |
 | 11 | Sugería versiones 6.x en el prompt | Consulta la última estable en `LATEST.7` y avisa si eliges una 6.x |
@@ -145,10 +145,16 @@ Nada está hardcodeado según el hardware del nodo donde se probó:
   `/etc/pve/corosync.conf` usa un modelo portable, para no romper la migración
   en vivo en clusters con CPU heterogénea: `x86-64-v2-AES` en PVE 7.1+, y
   `kvm64` en versiones anteriores, donde ese modelo todavía no existe.
-- **`ssd=1`** — solo si se confirma. Resuelve el storage a sus discos físicos
+- **Tipo de medio** — resuelve el storage a sus discos físicos
   (`lvm`/`lvmthin` vía `pvs`, `dir` vía `findmnt` — incluido root-on-ZFS —,
-  `zfspool` vía `zpool list`) y consulta `lsblk ROTA`. Si el storage es remoto
-  (NFS, CIFS, CephFS, RBD) no se puede saber y el flag se omite, sin preguntar.
+  `zfspool` vía `zpool list`) y consulta `lsblk ROTA`, para decirte si estás
+  desplegando sobre SSD o sobre disco rotacional. Si el storage es remoto
+  (NFS, CIFS, CephFS, RBD) no se puede saber y lo dice, sin preguntar.
+
+  **No se aplica `ssd=1`**: Proxmox solo acepta esa propiedad en `ide`, `sata`
+  y `scsi`. En `virtio0` el API la rechaza con
+  `virtio0.ssd: property is not defined in schema`, y como este instalador usa
+  virtio-blk a propósito, el flag no es aplicable nunca.
 - **Storage y bridge** — se listan los realmente disponibles en el nodo.
 
 ---

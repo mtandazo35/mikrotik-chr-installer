@@ -2,7 +2,7 @@
 #
 # install.sh — bootstrap de una linea para mikrotik-chr-installer
 #
-#   curl -fsSL https://raw.githubusercontent.com/mtandazo35/mikrotik-chr-installer/v1.1/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/mtandazo35/mikrotik-chr-installer/v1.2/install.sh | bash
 #
 # Por que existe este bootstrap y no se ejecuta el instalador directo:
 # mikrotik-chr-install.sh es INTERACTIVO (pregunta version, VMID, storage,
@@ -17,7 +17,7 @@
 set -Eeuo pipefail
 
 REPO="mtandazo35/mikrotik-chr-installer"
-REF="${CHR_REF:-v1.1}"          # se puede fijar otra version: CHR_REF=main
+REF="${CHR_REF:-v1.2}"          # se puede fijar otra version: CHR_REF=main
 DEST="/root/mikrotik-chr-install.sh"
 URL="https://raw.githubusercontent.com/${REPO}/${REF}/mikrotik-chr-install.sh"
 

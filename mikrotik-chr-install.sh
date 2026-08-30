@@ -10,12 +10,12 @@
 #
 # Generico: no asume tipo de storage, ni hardware, ni bridge.
 #
-# Version: 1.1
+# Version: 1.2
 #
 
 set -uo pipefail
 
-VERSION_SCRIPT="1.1"
+VERSION_SCRIPT="1.2"
 
 # ---------------------------------------------------------------- salida ----
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
@@ -30,7 +30,7 @@ title() { echo -e "\n${BOLD}$*${NC}"; }
 # --------------------------------------------------------------- globals ----
 TMPDIR_IMG="/root/temp/chr"
 CPU_TYPE="host"
-STORAGE_SSD_FLAG=""
+STORAGE_MEDIO=""
 CHR_VERSION=""
 VMID=""
 VM_NAME=""
@@ -357,17 +357,23 @@ ask_storage() {
         warn "Storage no valido. Opciones: $(echo "$candidatos" | tr '\n' ' ')"
     done
 
+    # NO se pone ssd=1: Proxmox solo acepta esa propiedad en ide/sata/scsi.
+    # En virtio-blk el API la rechaza con
+    #   "virtio0.ssd: property is not defined in schema"
+    # y como este instalador usa virtio0 a proposito (RouterOS 6.x no tiene
+    # driver de virtio-scsi), el flag no es aplicable NUNCA. Se deja solo el
+    # dato informativo. No reintroducir el flag.
     local rota
     if rota=$(detect_storage_rotational "$STORAGE"); then
         if [ "$rota" = "0" ]; then
-            STORAGE_SSD_FLAG=",ssd=1"
-            info "Storage '${STORAGE}' sobre disco no rotacional -> se activa ssd=1"
+            STORAGE_MEDIO="SSD/NVMe"
         else
-            info "Storage '${STORAGE}' sobre disco rotacional -> sin ssd=1"
+            STORAGE_MEDIO="disco rotacional"
         fi
     else
-        info "No se pudo determinar si '${STORAGE}' es SSD (storage remoto?) -> se omite ssd=1"
+        STORAGE_MEDIO="medio desconocido (storage remoto?)"
     fi
+    info "Storage '${STORAGE}' -> ${STORAGE_MEDIO}. (virtio-blk no admite ssd=1; no se aplica)"
 }
 
 ask_network() {
@@ -408,7 +414,7 @@ confirm() {
     Nombre ......... ${VM_NAME}
     CHR ............ ${CHR_VERSION}
     Cores / RAM .... ${VM_CORES} / ${VM_MEMORY} MB
-    Disco .......... ${VM_DISK} en ${STORAGE} (virtio0${STORAGE_SSD_FLAG})
+    Disco .......... ${VM_DISK} en ${STORAGE} (virtio0, ${STORAGE_MEDIO})
     Red ............ ${BRIDGE}${VLAN_TAG}
     CPU ............ ${CPU_TYPE}
 EOF
@@ -465,8 +471,11 @@ import_disk() {
     # virtio0 = virtio-blk. RouterOS 6.x NO tiene driver de virtio-scsi:
     # el bootloader arranca por BIOS pero el kernel no ve el disco y muere con
     # "ERROR: could not find disk!". virtio-blk funciona en 6.x y en 7.x.
-    qm set "$VMID" --virtio0 "${vol},discard=on${STORAGE_SSD_FLAG}" >/dev/null \
-        || die "No se pudo conectar el disco a virtio0."
+    if ! qm set "$VMID" --virtio0 "${vol},discard=on" >/dev/null 2>/tmp/chr-attach-$VMID.log; then
+        cat /tmp/chr-attach-$VMID.log >&2
+        qm destroy "$VMID" --purge >/dev/null 2>&1
+        die "No se pudo conectar el disco a virtio0. Se elimino la VM ${VMID}."
+    fi
     ok "Disco conectado a virtio0 (virtio-blk)."
 
     qm set "$VMID" --boot order=virtio0 >/dev/null \
