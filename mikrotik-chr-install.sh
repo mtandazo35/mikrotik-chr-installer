@@ -10,12 +10,12 @@
 #
 # Generico: no asume tipo de storage, ni hardware, ni bridge.
 #
-# Version: 1.2
+# Version: 1.3
 #
 
 set -uo pipefail
 
-VERSION_SCRIPT="1.2"
+VERSION_SCRIPT="1.3"
 
 # ---------------------------------------------------------------- salida ----
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
@@ -376,14 +376,64 @@ ask_storage() {
     info "Storage '${STORAGE}' -> ${STORAGE_MEDIO}. (virtio-blk no admite ssd=1; no se aplica)"
 }
 
+# Lista los bridges utilizables como 'bridge=' en net0.
+#
+# La fuente buena es la CONFIGURACION de red, no /sys/class/net: ahi aparecen
+# tambien los bridges internos de Proxmox, que nunca son un destino valido:
+#   fwbr<vmid>i<n>  -> bridge de firewall, uno por NIC de VM
+#   vmbr0v<vlan>    -> sub-bridge que Proxmox crea solo para un tag=
+# Listarlos confundiria al usuario con decenas de opciones invalidas.
+#
+# Se reconocen los bridges Linux ('bridge-ports'/'bridge_ports'), los de Open
+# vSwitch ('ovs_type OVSBridge') y las vnets de SDN. Asi funciona igual en un
+# nodo con nombres estandar, con OVS o con SDN.
+list_bridges() {
+    local encontrados
+    encontrados=$(
+        {
+            awk '
+                /^[[:space:]]*iface[[:space:]]+/ { ifn = $2; next }
+                /^[[:space:]]*(bridge[-_]ports|ovs_type[[:space:]]+OVSBridge)/ {
+                    if (ifn != "") print ifn
+                }
+            ' /etc/network/interfaces /etc/network/interfaces.d/* 2>/dev/null
+
+            sed -n 's/^vnet:[[:space:]]*\([^[:space:]]*\).*/\1/p' \
+                /etc/pve/sdn/vnets.cfg 2>/dev/null
+        } | sort -u -V
+    )
+
+    # Plan B: si la config no dice nada (red gestionada de otra forma), se mira
+    # el kernel descartando la fontaneria interna.
+    if [ -z "$encontrados" ]; then
+        local d n
+        for d in /sys/class/net/*/bridge; do
+            [ -d "$d" ] || continue
+            n=$(basename "$(dirname "$d")")
+            case "$n" in
+                fwbr*|*v[0-9]|*v[0-9][0-9]|*v[0-9][0-9][0-9]|*v[0-9][0-9][0-9][0-9]) continue ;;
+            esac
+            encontrados="${encontrados}${n}"$'\n'
+        done
+        encontrados=$(printf '%s' "$encontrados" | sort -u -V)
+    fi
+
+    printf '%s\n' "$encontrados" | sed '/^$/d'
+}
+
 ask_network() {
     title "6) Red"
     local bridges defecto
-    bridges=$(ls /sys/class/net 2>/dev/null | grep -E '^vmbr[0-9]+$' | sort -V)
-    [ -n "$bridges" ] || die "No se encontro ningun bridge vmbrX en este nodo."
+    bridges=$(list_bridges)
+    [ -n "$bridges" ] || die "No se encontro ningun bridge en este nodo (ni Linux ni OVS)."
 
     info "Bridges disponibles: $(echo "$bridges" | tr '\n' ' ')"
-    defecto=$(echo "$bridges" | head -1)
+    # vmbr0 es la convencion de Proxmox: si existe, se ofrece por defecto.
+    if echo "$bridges" | grep -qx "vmbr0"; then
+        defecto="vmbr0"
+    else
+        defecto=$(echo "$bridges" | head -1)
+    fi
 
     while true; do
         read -rp "  Bridge [${defecto}]: " BRIDGE

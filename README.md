@@ -16,7 +16,7 @@ creaba VMs que RouterOS 6.x no podía arrancar.
 En el nodo Proxmox, **como root**:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mtandazo35/mikrotik-chr-installer/v1.2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mtandazo35/mikrotik-chr-installer/v1.3/install.sh | bash
 ```
 
 Deja el instalador en `/root/mikrotik-chr-install.sh` y lanza el asistente.
@@ -155,7 +155,13 @@ Nada está hardcodeado según el hardware del nodo donde se probó:
   y `scsi`. En `virtio0` el API la rechaza con
   `virtio0.ssd: property is not defined in schema`, y como este instalador usa
   virtio-blk a propósito, el flag no es aplicable nunca.
-- **Storage y bridge** — se listan los realmente disponibles en el nodo.
+- **Storage y bridge** — se listan los realmente disponibles en el nodo. Los
+  bridges se leen de la **configuración de red** (`/etc/network/interfaces`,
+  `interfaces.d/` y las vnets de SDN), no de `/sys/class/net`: ahí aparecen
+  también los internos de Proxmox —`fwbr<vmid>i<n>` (firewall, uno por NIC) y
+  `vmbr0v<vlan>` (sub-bridge de un `tag=`)— que nunca son destino válido.
+  Reconoce bridges Linux, **Open vSwitch** (`ovs_type OVSBridge`) y **SDN**, así
+  que no depende de que se llamen `vmbrN`.
 
 ---
 
