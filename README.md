@@ -1,8 +1,91 @@
 # mikrotik-chr-installer
 
-Instalador de MikroTik CHR (Cloud Hosted Router) para Proxmox VE.
+Instalador de **MikroTik CHR** (Cloud Hosted Router) para **Proxmox VE**, en una sola línea.
 
-Reemplaza al viejo `mikrotikinstall.sh` que vivía en `/root` de los nodos.
+Crea la VM, descarga la imagen oficial, importa el disco en `virtio-blk` y la
+arranca. Interactivo: pregunta versión, VMID, recursos, storage, bridge y VLAN,
+detectando en cada nodo lo que hay disponible.
+
+Reemplaza al viejo `mikrotikinstall.sh` que vivía en `/root` de los nodos y que
+creaba VMs que RouterOS 6.x no podía arrancar.
+
+---
+
+## ⚡ Instalación rápida (one-liner)
+
+En el nodo Proxmox, **como root**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mtandazo35/mikrotik-chr-installer/v1.1/install.sh | bash
+```
+
+Deja el instalador en `/root/mikrotik-chr-install.sh` y lanza el asistente.
+Para reejecutarlo después no hace falta volver a descargar: `bash /root/mikrotik-chr-install.sh`.
+
+Otra rama o versión:
+
+```bash
+CHR_REF=main curl -fsSL https://raw.githubusercontent.com/mtandazo35/mikrotik-chr-installer/main/install.sh | bash
+```
+
+### Qué comprueba antes de tocar nada
+
+| Comprobación | Si falla |
+|---|---|
+| Usuario `root` | aborta |
+| Existe `qm` (es un nodo Proxmox) | aborta |
+| Existe `curl` | aborta |
+| **Versión de Proxmox VE ≥ 6.4** | aborta indicando la versión detectada |
+| Versión fuera de soporte upstream (< 8) | avisa y continúa |
+| Hay terminal interactivo | aborta **explicando cómo hacerlo a mano** |
+| Lo descargado empieza por el shebang | aborta (una ref inexistente devuelve HTML, no script) |
+| El script pasa `bash -n` | aborta |
+
+### Por qué hay un bootstrap y no se ejecuta el instalador directo
+
+`mikrotik-chr-install.sh` es **interactivo**. En un `curl … | bash` el `stdin`
+del proceso es la tubería de curl, así que cada `read` se tragaría el propio
+script en vez de esperar al usuario: el asistente se contestaría solo con
+basura.
+
+`install.sh` lo evita ejecutando el instalador con **`< /dev/tty`**, que
+reconecta el terminal real. Comprobado: con el método ingenuo la pregunta nunca
+llega; con `/dev/tty` el proceso tiene `stdin` en una tubería y aun así lee del
+teclado.
+
+---
+
+## Compatibilidad con Proxmox VE
+
+El instalador **detecta la versión de PVE y se adapta**, en vez de asumir uno.
+
+| PVE | Estado | Notas |
+|---|---|---|
+| **9.x** | probado | referencia de desarrollo |
+| **8.x** | soportado | |
+| **7.1 – 7.4** | soportado con aviso | fuera de soporte upstream |
+| **6.4 – 7.0** | soportado con aviso | CPU portable cae a `kvm64` (no hay `x86-64-v2-AES` antes de PVE 7.1) |
+| **< 6.4** | **rechazado** | `qm create --tags` todavía no existe |
+
+Dos detalles que cambian entre versiones y se resuelven **por capacidad, no por
+número de versión** — más fiable que mantener una tabla de equivalencias:
+
+- **Importar disco** — `qm disk import` (actual) o `qm importdisk` (nombre
+  antiguo, aún presente como alias). Se elige el que exista.
+- **Redimensionar** — `qm disk resize` o `qm resize`, igual.
+
+Si el nodo no expone ninguno de los dos, el script lo dice y se detiene en vez
+de fallar a medio camino.
+
+---
+
+## Requisitos
+
+- Nodo Proxmox VE 6.4 o superior, acceso `root`.
+- `curl`. `unzip` y `wget` se instalan solos si faltan.
+- Salida a internet para bajar la imagen de MikroTik.
+
+---
 
 ## El bug que motivó este repo
 
@@ -33,6 +116,8 @@ y 7.x por igual.
 Caso real reproducido en un nodo Proxmox VE 9 con un CHR 6.40.1 creado por el
 script viejo: la VM arranca el bootloader pero el kernel no encuentra disco.
 
+---
+
 ## Diferencias con el script viejo
 
 | # | `mikrotikinstall.sh` (viejo) | Este instalador |
@@ -50,49 +135,27 @@ script viejo: la VM arranca el bootloader pero el kernel no encuentra disco.
 | 11 | Sugería versiones 6.x en el prompt | Consulta la última estable en `LATEST.7` y avisa si eliges una 6.x |
 | 12 | Sin `--agent` | `--agent 1` en RouterOS 7.x |
 
+---
+
 ## Genérico para cualquier Proxmox
 
 Nada está hardcodeado según el hardware del nodo donde se probó:
 
-- **`cpu=`** — `host` si el nodo es standalone (máximo rendimiento);
-  `x86-64-v2-AES` si existe `/etc/pve/corosync.conf`, para no romper la
-  migración en vivo en clusters con CPU heterogénea.
+- **`cpu=`** — `host` si el nodo es standalone (máximo rendimiento). Si existe
+  `/etc/pve/corosync.conf` usa un modelo portable, para no romper la migración
+  en vivo en clusters con CPU heterogénea: `x86-64-v2-AES` en PVE 7.1+, y
+  `kvm64` en versiones anteriores, donde ese modelo todavía no existe.
 - **`ssd=1`** — solo si se confirma. Resuelve el storage a sus discos físicos
   (`lvm`/`lvmthin` vía `pvs`, `dir` vía `findmnt` — incluido root-on-ZFS —,
   `zfspool` vía `zpool list`) y consulta `lsblk ROTA`. Si el storage es remoto
   (NFS, CIFS, CephFS, RBD) no se puede saber y el flag se omite, sin preguntar.
 - **Storage y bridge** — se listan los realmente disponibles en el nodo.
 
-## ⚡ Instalación rápida (one-liner)
-
-En el nodo Proxmox, como root:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/mtandazo35/mikrotik-chr-installer/v1.0/install.sh | bash
-```
-
-Descarga el instalador a `/root/mikrotik-chr-install.sh` y lanza el asistente.
-Para probar otra rama o versión: `CHR_REF=main curl -fsSL .../main/install.sh | bash`.
-
-### Por qué hace falta un bootstrap y no se ejecuta el instalador directo
-
-`mikrotik-chr-install.sh` es **interactivo**. En un `curl … | bash` el `stdin`
-del proceso es la tubería de curl, así que cada `read` se tragaría el propio
-script en vez de esperar al usuario: el asistente se saltaría solo y con
-respuestas basura.
-
-`install.sh` lo evita ejecutando el instalador con `< /dev/tty`, que reconecta
-el terminal real. Comprobado: con el método ingenuo la pregunta nunca llega;
-con `/dev/tty` el proceso tiene `stdin` en una tubería y aun así lee del
-teclado correctamente.
-
-Antes de ejecutar nada verifica que hay `root`, `qm` (o sea, que es un nodo
-Proxmox), `curl` y un terminal interactivo; que lo descargado empieza por el
-shebang esperado (y no es una página de error de GitHub por una ref
-inexistente); y que pasa `bash -n`. Si no hay terminal, no se cuelga: dice cómo
-hacerlo a mano.
+---
 
 ## Uso manual
+
+Si prefieres no usar el one-liner:
 
 ```bash
 scp mikrotik-chr-install.sh root@<nodo-proxmox>:/root/
@@ -101,16 +164,20 @@ chmod +x /root/mikrotik-chr-install.sh
 /root/mikrotik-chr-install.sh
 ```
 
-Es interactivo. Si algo falla durante la importación del disco, la VM a medio
-crear se elimina sola (`qm destroy --purge`) para no dejar basura.
+Si algo falla durante la importación del disco, la VM a medio crear **se
+elimina sola** (`qm destroy --purge`) para no dejar basura. El log de la
+importación queda en `/tmp/chr-import-<VMID>.log`.
+
+---
 
 ## Notas
 
 - Las imágenes descargadas quedan cacheadas en `/root/temp/chr/`.
-- Usuario por defecto del CHR: `admin` sin contraseña. **Cámbiala en el primer
-  acceso.**
-- Evita RouterOS 6.x: fuera de soporte y con CVEs conocidas
-  (p. ej. `CVE-2018-14847` en Winbox). El script avisa y pide confirmación.
-- Los scripts se desarrollan en local y se suben al nodo bajo pedido; ver
-  `.gitattributes` (`eol=lf`) — un CRLF hace que Linux responda
-  `No such file or directory` al ejecutar el script.
+- Usuario por defecto del CHR: `admin` **sin contraseña**. Cámbiala en el
+  primer acceso.
+- Evita RouterOS 6.x: fuera de soporte y con CVEs conocidas (p. ej.
+  `CVE-2018-14847` en Winbox). El script avisa y pide confirmación.
+- El instalador va a `/root`, no a `/tmp`: sobrevive reinicios y se puede
+  reejecutar sin volver a descargarlo.
+- `.gitattributes` fuerza `eol=lf`. Un CRLF hace que Linux responda
+  `No such file or directory` al ejecutar el script, sin que git lo delate.

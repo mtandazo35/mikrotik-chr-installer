@@ -10,12 +10,12 @@
 #
 # Generico: no asume tipo de storage, ni hardware, ni bridge.
 #
-# Version: 1.0
+# Version: 1.1
 #
 
 set -uo pipefail
 
-VERSION_SCRIPT="1.0"
+VERSION_SCRIPT="1.1"
 
 # ---------------------------------------------------------------- salida ----
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
@@ -41,6 +41,11 @@ STORAGE=""
 BRIDGE=""
 VLAN_TAG=""
 IMG_FILE=""
+PVE_VERSION=""
+PVE_MAJOR=0
+PVE_MINOR=0
+QM_IMPORT=""
+QM_RESIZE=""
 
 # ------------------------------------------------------------ pre-vuelo ----
 preflight() {
@@ -59,12 +64,77 @@ preflight() {
     ok "Dependencias listas."
 }
 
+# --------------------------------------------- version de Proxmox VE ----
+# Distintas versiones de PVE cambian los nombres de subcomando de qm y los
+# modelos de CPU disponibles. Aqui se detecta la version y, sobre todo, se
+# comprueba por CAPACIDAD que subcomandos existen realmente: es mas fiable
+# que deducirlo de un numero de version.
+#
+#   qm disk import   (PVE 7+)   <- nombre actual
+#   qm importdisk    (PVE 6.x)  <- nombre antiguo, sigue como alias en 7/8/9
+#
+# Minimo real: 6.4, que es cuando 'qm create --tags' empieza a existir.
+PVE_MIN_MAJOR=6
+PVE_MIN_MINOR=4
+
+detect_pve_version() {
+    title "0) Comprobando Proxmox VE"
+
+    PVE_VERSION=$(pveversion 2>/dev/null | sed -n 's|^pve-manager/\([0-9][0-9.]*\)/.*|\1|p')
+    [ -n "$PVE_VERSION" ] || PVE_VERSION=$(pveversion 2>/dev/null | sed -n 's|^pve-manager/\([0-9][0-9.]*\).*|\1|p')
+    [ -n "$PVE_VERSION" ] || die "No se pudo determinar la version de Proxmox VE ('pveversion' no dio salida reconocible)."
+
+    PVE_MAJOR=${PVE_VERSION%%.*}
+    PVE_MINOR=$(printf '%s' "$PVE_VERSION" | cut -d. -f2)
+    [ -n "$PVE_MINOR" ] || PVE_MINOR=0
+
+    info "Proxmox VE detectado: ${BOLD}${PVE_VERSION}${NC}  (kernel $(uname -r))"
+
+    # Demasiado viejo: ni siquiera soporta las opciones que usa 'qm create'.
+    if [ "$PVE_MAJOR" -lt "$PVE_MIN_MAJOR" ] ||
+       { [ "$PVE_MAJOR" -eq "$PVE_MIN_MAJOR" ] && [ "$PVE_MINOR" -lt "$PVE_MIN_MINOR" ]; }; then
+        die "Proxmox VE ${PVE_VERSION} es demasiado antiguo. Hace falta ${PVE_MIN_MAJOR}.${PVE_MIN_MINOR} o superior (por 'qm create --tags')."
+    fi
+
+    # Soportado pero fuera de soporte upstream: se avisa, no se bloquea.
+    if [ "$PVE_MAJOR" -lt 8 ]; then
+        warn "PVE ${PVE_VERSION} esta fuera de soporte de Proxmox. El script deberia funcionar, pero no esta probado ahi."
+    fi
+
+    # --- subcomandos, por capacidad y no por numero de version ---
+    if qm help disk import >/dev/null 2>&1; then
+        QM_IMPORT="disk import"
+    elif qm help importdisk >/dev/null 2>&1; then
+        QM_IMPORT="importdisk"
+    else
+        die "Este PVE no expone ni 'qm disk import' ni 'qm importdisk'."
+    fi
+
+    if qm help disk resize >/dev/null 2>&1; then
+        QM_RESIZE="disk resize"
+    elif qm help resize >/dev/null 2>&1; then
+        QM_RESIZE="resize"
+    else
+        die "Este PVE no expone ni 'qm disk resize' ni 'qm resize'."
+    fi
+
+    ok "Subcomandos: 'qm ${QM_IMPORT}' y 'qm ${QM_RESIZE}'."
+}
+
 # ------------------------------------------------- deteccion de hardware ----
 # cpu=host da maximo rendimiento pero rompe la migracion en vivo entre nodos
 # con CPU distinta. En cluster se usa un modelo portable.
 detect_cpu_type() {
     if [ -f /etc/pve/corosync.conf ]; then
-        CPU_TYPE="x86-64-v2-AES"
+        # x86-64-v2-AES aparece con QEMU 6.1, o sea PVE 7.1. En nodos mas
+        # viejos ese modelo no existe y 'qm create' fallaria; kvm64 es el
+        # portable de toda la vida.
+        if [ "$PVE_MAJOR" -gt 7 ] || { [ "$PVE_MAJOR" -eq 7 ] && [ "$PVE_MINOR" -ge 1 ]; }; then
+            CPU_TYPE="x86-64-v2-AES"
+        else
+            CPU_TYPE="kvm64"
+            warn "PVE ${PVE_VERSION} no tiene x86-64-v2-AES -> se usa kvm64."
+        fi
         info "Nodo en cluster -> cpu=${CPU_TYPE} (portable, permite migracion en vivo)"
     else
         CPU_TYPE="host"
@@ -380,7 +450,7 @@ import_disk() {
 
     # 'qm disk import' elige el formato correcto para cada tipo de storage
     # (qcow2 en dir, raw en lvm/zfs). Nada de mkdir en /var/lib/vz.
-    if ! qm disk import "$VMID" "$IMG_FILE" "$STORAGE" >/tmp/chr-import-$VMID.log 2>&1; then
+    if ! qm $QM_IMPORT "$VMID" "$IMG_FILE" "$STORAGE" >/tmp/chr-import-$VMID.log 2>&1; then
         cat /tmp/chr-import-$VMID.log >&2
         qm destroy "$VMID" --purge >/dev/null 2>&1
         die "Fallo la importacion del disco. Se elimino la VM ${VMID}."
@@ -403,7 +473,7 @@ import_disk() {
         || die "No se pudo fijar el orden de arranque."
     ok "Orden de arranque: virtio0."
 
-    if ! qm disk resize "$VMID" virtio0 "$VM_DISK" >/dev/null 2>&1; then
+    if ! qm $QM_RESIZE "$VMID" virtio0 "$VM_DISK" >/dev/null 2>&1; then
         warn "No se pudo redimensionar el disco a ${VM_DISK} (queda en el tamano original de la imagen)."
     else
         ok "Disco redimensionado a ${VM_DISK}."
@@ -438,6 +508,7 @@ main() {
     echo -e "${NC}"
 
     preflight
+    detect_pve_version
     detect_cpu_type
     ask_version
     download_image
