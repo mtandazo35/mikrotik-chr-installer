@@ -30,8 +30,8 @@ no hay sistema operativo que responda a ACPI.
 **El fix**: el disco va en `virtio0` (virtio-blk), soportado por RouterOS 6.x
 y 7.x por igual.
 
-Caso real: VM 3005 `Mikrotik-NAT` en el nodo `mtandazo1` (66.231.64.154),
-creada el 2026-07-22 con el script viejo y un CHR 6.40.1.
+Caso real reproducido en un nodo Proxmox VE 9 con un CHR 6.40.1 creado por el
+script viejo: la VM arranca el bootloader pero el kernel no encuentra disco.
 
 ## Diferencias con el script viejo
 
